@@ -2,48 +2,71 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup as bs
 import sqlite3
+import os
 
-url = 'https://www.soccerbase.com/teams/home.sd'
-r = requests.get(url)
-if r.status_code == 200:
-    soup = bs(r.content, 'html.parser')
-else:
-    print("Error: could not connect to website")
-    exit()
 
-teams = soup.find_all('li', {'class': 'alt'})
-teams_dict = {}
-for team in teams:
-    link = 'https://www.soccerbase.com' + team.find('a')['href']
-    team = team.text
-    teams_dict[team] = link
+def get_soup(url):
+    r = requests.get(url)
+    if r.status_code == 200:
+        return bs(r.content, 'html.parser')
+    else:
+        raise Exception("Error: could not connect to website")
 
-consolidated = []
-for k, v in teams_dict.items():
-    if 'javascript: void(0);' in v:
-        continue
-    if '/tournaments/tournament.sd' in v:
-        continue
+
+def get_teams_dict(soup):
+    teams = soup.find_all('li', {'class': 'alt'})
+    teams_dict = {}
+    for team in teams:
+        link = 'https://www.soccerbase.com' + team.find('a')['href']
+        name = team.text
+        teams_dict[name] = link
+    return teams_dict
+
+
+def get_team_data(soup, name, link):
     headers = ['Team', 'Competition', 'Home Team', 'Home Score', 'Away Team', 'Away Score', 'Date Keep']
-    r = requests.get('%s&teamTabs=results' % v)
-    soup = bs(r.content, 'html.parser')
     h_scores = [int(i.text) for i in soup.select('.score a em:first-child')]
     a_scores = [int(i.text) for i in soup.select('.score a em + em')]
     limit = len(a_scores)
-    team = [k for i in soup.select('.tournament', limit=limit)]
+    team = [name for i in soup.select('.tournament', limit=limit)]
     comps = [i.text for i in soup.select('.tournament a', limit=limit)]
     dates = [i.text for i in soup.select('.dateTime .hide', limit=limit)]
     h_teams = [i.text for i in soup.select('.homeTeam a', limit=limit)]
     a_teams = [i.text for i in soup.select('.awayTeam a', limit=limit)]
-    df = pd.DataFrame(list(zip(team, comps, h_teams, h_scores, a_teams, a_scores, dates)),columns=headers)
-    consolidated.append(df)
-    print(df)
-con = sqlite3.connect("datos.db")
-cursor = con.cursor()
-for df in consolidated:
-    df.to_sql("datos", con, if_exists="append")
-con.commit()
-con.close()
+    df = pd.DataFrame(list(zip(team, comps, h_teams, h_scores, a_teams, a_scores, dates)), columns=headers)
+    return df
 
 
-print("Data saved to file")
+def save_data_to_db(data, db_path):
+    con = sqlite3.connect(db_path)
+    for df in data:
+        df.to_sql("datos", con, if_exists="append")
+    con.commit()
+    con.close()
+
+
+if __name__ == '__main__':
+    url = 'https://www.soccerbase.com/teams/home.sd'
+    try:
+        soup = get_soup(url)
+    except Exception as e:
+        print(str(e))
+        exit()
+
+    teams_dict = get_teams_dict(soup)
+    data = []
+    for name, link in teams_dict.items():
+        if 'javascript: void(0);' in link or '/tournaments/tournament.sd' in link:
+            continue
+        try:
+            soup = get_soup('%s&teamTabs=results' % link)
+            df = get_team_data(soup, name, link)
+            data.append(df)
+            print(df)
+            os.system('clear')
+        except Exception as e:
+            print(str(e))
+
+    db_path = "datos.db"
+    save_data_to_db(data, db_path)
+    print("Data saved to file")
